@@ -1,0 +1,248 @@
+Начинаем проект через командную строку cmd
+
+Навигация
+dir = содержание директории
+cd .. = на уровень выше
+
+Создать директорию
+mkdir dj_celery_docker_1
+
+Инициализировать пустой репозиторий
+git init
+
+Создать пустой файл
+type nul > "README.md"
+type nul > ".gitignore"
+
+Создать директорию webapp, перейти в нее
+mkdir webapp
+cd webapp
+
+Создать виртуальное окружение 
+python -m venv env
+Активировать его
+для Windows = env\Scripts\activate
+для Linux = . ./env/bin/activate
+а для деактивации = deactivate
+
+Установить django
+pip install -U Django
+
+создать проект, создаст внутр директорию с именем proj
+django-admin startproject proj
+
+переименовать внешнюю папку proj проекта в src
+(формат команды = rename file1.txt file2.txt)
+rename proj src
+
+установить celery
+pip install celery
+(  Celery сайт https://docs.celeryq.dev/en/stable/getting-started/first-steps-with-celery.html#first-steps  )
+
+установить redis (клиент для связи с брокером сообщений)
+pip install redis
+
+создаст файл и запишет в него зависимости
+pip freeze > requirements.txt
+
+перейти в директорию на уровень выше
+cd ..
+
+создать файл
+docker-compose.yaml
+через cmd, например так = copy con filename_with_extension
+copy con docker-compose.yaml = здесь же записать текст в него 
+и сохранить Ctrl + Z и закрыть Ctrl + C
+
+поднятие сборки, в папке с docker-compose.yaml
+docker-compose up --build
+прим: команда docker
+
+приложение запустится стартовой страницей django
+http://127.0.0.1:8000/
+
+по инструкции на сайте
+https://docs.celeryq.dev/en/stable/django/first-steps-with-django.html?highlight=django
+создать file, скопировать содержимое с сайта. 
+proj/proj/celery.py
+
+далее в proj/proj/__init__.py:
+добавить код с сайта.
+
+в директории dj_celery_docker_1\webapp\src> 
+создать приложение main
+python manage.py startapp main
+далее зарегистрировать в settings в Installed Apps
+
+в директории приложения создать tasks.py
+(с кодом примера с сайта)
+
+создать view в views.py
+from django.http import HttpRespons
+from . import tasks
+def home(request):
+    # tasks.download_a_cat.delay()
+    return HttpResponse('<h1>Загружаю фото кота!!!!</h1>')
+
+добавить путь в urls, например главной старницы
+from main import views
+...
+path('', views.home),
+ 
+
+установить requests для загрузки фото
+pip install requests
+
+создаст файл и запишет в него зависимости
+pip freeze > requirements.txt
+
+далее создаем task в tasks.py
+пишем Импорты, URL источника фото
+import requests as requests
+import uuid # для генерации случайных имен файлов
+from django.conf import settings
+CAT_URL = 'http://thecatapi.com/api/images/get?format=src&type=gif'
+
+
+@shared_task
+def download_a_cat():
+    resp = response.get(CAT_URL)
+    # получаем расширение файла
+    file_ext = resp.headers.get('Content-Type').split('/')[1]
+    # создаем имя файла
+    # = имя базовой директории / cats / рандомное имя . расширение
+    file_name = settings.BASE_DIR / 'cats' / (str(uuid.uuid4()) + "." + file_ext)
+
+    # открываем файл на запись в режиме байтов wb
+    with open(file_name, 'wb') as f:
+        # и записываем каждый chunk
+        # из resp.iter_content
+        # в файл f
+        for chunk in resp.iter_content(chunk_size=128):
+            f.write(chunk)
+
+   return True
+(продюсер? готов)
+
+далее - добавим связь с Redis
+(т.е. указание куда сохранять задачи для воркера)
+в settings добавляем
+CELERY_BROKER_URL = 'redis://redis:6379'
+"""это строка куда по сети посылать сообщения:
+протокол redis и его url и порт на котором он слушает соединения,
+второе redis - это имя нашего сервера днс, которое Докером преобразуется в IP адрес (оно должно совпадать с названием сервиса в файле docker-compose)"""
+
+добавим связь во view с task
+from . import tasks
+def home(request):
+    # вызываем task
+    # .delay() - выставить задачу 
+    # в очередь в асинхронном режиме
+    tasks.download_a_cat.delay()
+    return HttpResponse('<h1>Загружаю фото кота!!!!</h1>')
+
+
+обновляем зависимости в директории webapp>
+pip freeze > requirements.txt
+(создал второй файл зачем? первый в дир dj_celery_docker_1>)
+первый файл удалил, оставил только в webapp>
+
+создал директорию cats в src
+
+запускаем сборку в дир dj_celery_docker_1>
+docker-compose up --build
+
+страница запустилась и мгновенно выполняется, 
+задачи ставятся, но не выполняются т.к. еще не добавлен worker
+
+
+worker - отдельный контейнер, 
+подписанный на сообщения в очереди и 
+ждущий, когда в очереди появятся задача
+
+добавим и опишем worker в файле docker-compose
+  worker:
+    restart: always
+# из чего будет состоять? 
+# исходный код в приложении ./webapp
+# подключаем папку на своем ПК для сохранения скачанных
+# на пк ./cats == вместо /app/src/cats в контейнере
+# и команда для запуска
+# command: ['celery', '--workdir=./src', '-A', 'proj', 'worker' ]
+# не запускаем сервер который слушает обращения к нему, а 
+# запускается worker, рабочая директория на уровень ниже чем где запускается
+# имя проекта proj в котором модуль celery.py
+# и команда запуска воркера = worker
+    build: 
+      context: ./webapp
+    volumes: 
+      - ./cats:/app/src/cats
+    command: ['celery', '--workdir=./src', '-A', 'proj', 'worker' ]
+
+
+ВСЕ РАБОТАЕТ
+Файлы загружаются в папку 
+dj_celery_docker_1\cats
+
+
+
+
+
+
+*** ПРИМЕЧАНИЕ  ***
+docker-compose.yaml или yml в директории dj_celery_docker_1
+
+version: ""  # это версия docker compose - см https://docs.docker.com/compose/compose-file/compose-versioning/
+
+services:
+  redis: 
+    image: redis
+    restart: always
+
+  webapp:
+    restart: always
+    build:
+      context: ./webapp
+    ports:
+      - "8000:8000"
+    command: [ "python3", "./src/manage.py", "runserver", "0.0.0.0:8000"]
+
+  worker:
+    restart: always
+    build:
+      context: ./webapp
+    volumes:
+      - ./cats:/app/src/cats
+    command: ['celery', '--workdir=./src', '-A', 'proj', 'worker' ]
+
+
+
+
+*** ПРИМЕЧАНИЕ  ***
+
+Файл dockerfile в диретории webapp>
+
+FROM python:3.9
+RUN apt-get update -y
+RUN apt-get upgrade -y
+
+WORKDIR /app
+COPY ./requirements.txt ./
+RUN pip install -r requirements.txt
+COPY ./src ./src
+
+CMD [ "python3", "./src/manage.py", "runserver", "0.0.0.0:8000"]
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
