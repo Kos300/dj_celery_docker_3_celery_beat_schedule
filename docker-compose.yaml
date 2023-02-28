@@ -12,6 +12,8 @@ services:
     ports:
       - "8000:8000"
     command: [ "python3", "./src/manage.py", "runserver", "0.0.0.0:8000"]
+    volumes:
+      - ./db:/app/src/db
 
   worker:
     restart: always
@@ -20,3 +22,11 @@ services:
     volumes:
       - ./cats:/app/src/cats
     command: ['celery', '--workdir=./src', '-A', 'proj', 'worker' ]
+
+  celery-beat:
+    restart: always
+    build:
+      context: ./webapp
+    volumes:
+      - ./db:/app/src/db
+    command: ['celery', '--workdir=./src', '-A', 'proj', 'beat', '-l', 'INFO', '--scheduler', 'django_celery_beat.schedulers:DatabaseScheduler']

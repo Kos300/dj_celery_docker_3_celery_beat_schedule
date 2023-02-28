@@ -27,3 +27,10 @@ def download_a_cat():
             f.write(chunk)
 
     return True
+
+@shared_task
+def download_5_cats_with_redis():
+    for i in range(5):
+        download_a_cat.delay()
+    return True
+

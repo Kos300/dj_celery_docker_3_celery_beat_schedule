@@ -1,0 +1,184 @@
+Celerybeat + Django + Docker
+
+задачи по расписанию,
+применимы например для:
+- отчеты
+- вычищение мусора
+- сохранение бэкапов
+- напоминание
+- рассылка уведомлений
+
+задачи хранит в БД,
+и ставит их в очередь по расписанию.
+
+создать директорию
+
+клонировать в нее проект
+git clone URL . (точка - без создания папки проекта,
+тк уже создана)
+
+во внутр дир webapp
+создать вирт окр
+python -m venv env
+
+активировать его
+env\Scripts\activate
+
+
+cls
+очистить терминал
+
+оставить в зависимостях
+celery==5.2.7
+Django==4.1.7
+redis==4.5.1
+requests==2.28.2
+
+docker-compose up --build
+запустить сборку
+
+http://localhost:8000/
+проверил, все работает.
+
+добавил к зависимостям
+django-celery-beat
+
+добавим в APPS в settings
+https://pypi.org/project/django-celery-beat/
+
+docker-compose down
+остановим контейнер
+
+
+создать папку для бд
+дополнить volumes также в контейнере
+в docker compose
+
+webapp:
+    restart: always
+    build:
+      context: ./webapp
+    ports:
+      - "8000:8000"
+    command: [ "python3", "./src/manage.py", "runserver", "0.0.0.0:8000"]
+    volumes:
+      - ./db:/app/src/db
+
+settings
+исправил путь к БД
+        'NAME': BASE_DIR / 'db' / 'db.sqlite3',
+
+
+выполнить миграции (для бд расписания)
+заходим в контейнер приложения в его Терминал
+# pwd или # ls -l
+# cd src
+# ls == db  main  manage.py  proj
+# python manage.py makemigrations
+# python manage.py migrate
+
+создадим пользователя admin
+# python manage.py createsuperuser
+
+заходим в админку http://localhost:8000/admin/
+в ней уже есть раздел таблиц
+PERIODIC TASKS
+Clocked
+Crontabs
+Intervals
+Periodic tasks
+Solar events
+
+создадим периодическую задачу
+загрузки файла.
+- создаем интервал в Intervals
+- задачу в Periodic tasks
+(в списке выбираем нужную задачу из кода,
+выбираем интервал,
+сохраняем)
+НО! чтобы задача запускалась нужен,
+сервис который ее запустит
+
+для этого в docker-compose
+добавляем celery-beat
+# строка command из документации celery beat
+# указываем расположение бд
+  celery-beat:
+    restart: always
+    build:
+      context: ./webapp
+    volumes:
+      - ./db:/app/src/db
+    command: ['celery', '--workdir=./src', '-A', 'proj', 'beat', '-l', 'INFO', '--scheduler', 'django_celery_beat.schedulers:DatabaseScheduler']
+    # -l INFO = это уровень логирования
+    # --scheduler ... = где хранятся задачи с интервалами и пр
+
+останавливаем текущую сборку, удалит контейнеры
+docker compose down
+Stops containers and removes containers, networks,
+volumes, and images created by up.
+https://docs.docker.com/engine/reference/commandline/compose_down/
+
+и запускаем с добавленным сервисом celery-beat
+docker-compose up --build
+https://docs.docker.com/engine/reference/commandline/compose_up/
+
+Работает,
+задача выполняется
+файлы загружаются с указанным интервалом.
+== и запси в логе формата:
+dj_celery_docker_3-celery-beat-1  | [2023-02-28 08:21:08,245: INFO/MainProcess] Schedule
+r: Sending due task download_file_every_10_sec (main.tasks.download_a_cat)
+== в админке, к задаче добавилась дата последнего запуска.
+
+***
+Создадим задачу однократную -
+загрузка файла по расписанию 1 раз.
+(может быть использовано для:
+- напоминания о событии
+и др. )
+
+смотрим в документации django_celery_beat.models
+https://django-celery-beat.readthedocs.io/en/latest/reference/django-celery-beat.models.html
+
+подключим задачу вручную.
+в терминале контейнера приложения.
+# cd src
+# ls
+    db  main  manage.py  proj
+# python manage.py shell
+    Python 3.9.16 (main, Feb 11 2023, 02:49:26)
+    [GCC 10.2.1 20210110] on linux
+    Type "help", "copyright", "credits" or "license" for more information.
+    (InteractiveConsole)
+    >>>
+    Импортируем
+>>> from django_celery_beat.models import ClockedSchedule
+>>> from django_celery_beat.models import PeriodicTask
+>>> from datetime import timedelta
+>>> from django.utils import timezone
+
+    создаем переменную 20 минут
+>>> twmins = timedelta(seconds=1200)
+>>> the_time = timezone.now() + twmins
+>>> the_time
+    datetime.datetime(2023, 2, 28, 9, 50, 3, 977596, tzinfo=datetime.timezone.utc)
+
+    теперь создать объект задачи
+    добавить время в расписание
+>>> clocked_task = ClockedSchedule.objects.create(clocked_time=the_time)
+    создать задачу с этим временем,
+    # clocked - указать на время, добавленное в расписание.
+    # name - присвоить имя создаваемой задачи
+    # task - имя задачи/функции, которая выполнится, из Админки или кода
+    # one_off=True - однократная задача
+>>> task = PeriodicTask.objects.create(clocked=clocked_task, name='a task', task='main.tasks.download_a_cat', one_off=True)
+
+Проверяем в админке :
+- в Clocked - появилось время
+- в Periodic tasks - появилась строка 'a task'
+
+В терминале получили запись об отправке задачи 'a task' в указанное время.
+    dj_celery_docker_3 -celery-beat-1  | [2023-02-28 10:20:37,452: INFO/MainProcess]
+    Scheduler: Sending due task a task (main.tasks.download_a_cat)
+
